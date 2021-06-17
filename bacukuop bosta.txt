@@ -1,0 +1,232 @@
+---
+title: "Trabalho Final ME921"
+author: 
+  - Gustavo Leiva (RA 217418)
+geometry: left=2cm,right=2cm,top=2cm,bottom=1.8cm
+output:
+  pdf_document:
+    latex_engine: xelatex
+header-includes:
+  - \usepackage{float}
+  - \usepackage{fontspec}
+  - \setmainfont{Times New Roman}
+  - \usepackage{wrapfig}
+  - \usepackage{setspace}
+  - \setstretch{1.5}
+  - \setlength{\parindent}{4em}
+fontsize: 11pt
+---
+
+\renewcommand{\figurename}{Figura}
+\renewcommand{\tablename}{Tabela}
+
+{r ajusta_chunks, echo = F}
+
+library(knitr)
+
+opts_chunk$set(echo = F)
+
+opts_chunk$set(warning = F)
+
+opts_chunk$set(include = F)
+
+opts_chunk$set(message = F)
+
+{r carregaPacotes}
+library(tidyverse)
+library(ggrepel)
+library(ggimage)
+library(rvest)
+library(cluster)
+library(factoextra)
+library(NbClust)
+library(kableExtra)
+
+{r extraiDados}
+url = "https://terraria.fandom.com/wiki/Swords"
+
+terraria_html = read_html(url) 
+
+swords_raw = terraria_html %>%
+  html_nodes("table") %>% 
+  html_table() %>% 
+  .[[1]] %>% 
+  .[,-1]
+
+
+
+names(swords_raw) = c("Name", "Damage", "Use time", 
+                      "Knockback", "Crit", "Autoswing",
+                      "Hardmode", "Rarity", "Sell", "Source")
+
+list_imgs = terraria_html %>% 
+  html_nodes("img") %>% 
+  html_attr("alt") 
+
+list_links = terraria_html %>% 
+  html_nodes("img") %>% 
+  html_attr("src")
+
+img_links = tibble(Name = list_imgs, URL = list_links) %>% distinct()
+
+swords = swords_raw %>%
+  mutate(Name = str_remove_all(swords_raw$Name, "Internal")) %>% 
+  separate(Name, c("Name", "ID"), sep = "Item ID:") %>% 
+  separate(Damage, c("Damage"), sep = " ") %>% 
+  separate(`Use time`, c("Use time"), sep = "\\(") %>% 
+  separate(Knockback, c("Knockback"), sep = "\\(") %>% 
+  separate(Crit, c("Crit"), sep = " ") %>% 
+  mutate(Crit = as.numeric(str_remove(Crit, "\\%"))/100 ) %>% 
+  mutate(Autoswing = factor(ifelse(Autoswing == "✓", 1, 0 )))  %>% 
+  mutate(Hardmode = factor(ifelse(Hardmode == "✓", 1, 0 ))) %>% 
+  mutate(Rarity = factor(Rarity, 
+                         levels = c("00*", "01*", "02*", "03*", 
+                                    "04*", "05*", "06*", "07*",
+                                    "08*", "09*", "10*"))) %>% 
+  mutate(ID = as.numeric(ID)) %>% 
+  mutate(Damage = as.numeric(Damage)) %>% 
+  mutate(`Use time` = as.numeric(`Use time`)) %>% 
+  mutate(Knockback = as.numeric(Knockback)) %>% 
+  mutate(Name = str_trim(Name)) %>% 
+  dplyr::select(-Sell, -Source) %>% 
+  left_join(img_links, by = "Name") %>% 
+  filter(ID != 5010)
+
+swords_df = swords %>% dplyr::select(-ID, -URL) %>% 
+  data.frame(row.names = "Name")
+
+{r analDescritiva}
+g.dmVSut = swords %>% 
+  ggplot(aes(y = Damage, x = `Use time`)) +
+  geom_image(aes(image = URL)) +
+  geom_label_repel(aes(label = Name),
+                   data = filter(swords, 
+                                 ID %in% c(3063, 3827, 2330, 757, 3106))) + 
+  theme_minimal()
+
+g.dmVSkb = swords %>% 
+  ggplot(aes(y = Damage, x = Knockback)) +
+  geom_image(aes(image = URL)) +
+  geom_label_repel(aes(label = Name),
+                   data = filter(swords, 
+                                 ID %in% c(3258, 3063, 3827, 486, 4463))) +
+  theme_minimal()
+
+
+
+ad.hmVScon = swords %>% dplyr::select(Hardmode, Damage, 
+                                      `Use time`, Knockback) %>% 
+  pivot_longer(c('Damage', 'Use time'), names_to = "Variável", 
+               values_to = "Valor") %>% 
+  group_by(Hardmode,Variável) %>% 
+  summarise(n = n(), 
+            `Média` = round(mean(Valor,na.rm=T),2),
+            `D.P.` = sd(Valor,na.rm = T),
+            Q1 = quantile(Valor, .25),
+            `Q2/Med` = quantile(Valor, .5),
+            Q3 = quantile(Valor, .75),
+            `Mín.` = min(Valor,na.rm=T),
+            `Máx.` = max(Valor,na.rm=T))
+
+ad.asVScon = swords %>% dplyr::select(Autoswing, Damage,
+                                      `Use time`, Knockback) %>% 
+  pivot_longer(c('Damage', 'Use time'), names_to = "Variável", 
+               values_to = "Valor") %>% 
+  group_by(Autoswing,Variável) %>% 
+  summarise(n = n(), 
+            `Média` = round(mean(Valor,na.rm=T),2),
+            `D.P.` = sd(Valor,na.rm = T),
+            Q1 = quantile(Valor, .25),
+            `Q2/Med` = quantile(Valor, .5),
+            Q3 = quantile(Valor, .75),
+            `Mín.` = min(Valor,na.rm=T),
+            `Máx.` = max(Valor,na.rm=T))
+
+{r cstats.func}
+cstats.table <- function(dist, tree, k) {
+  clust.assess <- c("cluster.number","n","within.cluster.ss","average.within","average.between",
+                    "wb.ratio","dunn2","avg.silwidth")
+  clust.size <- c("cluster.size")
+  stats.names <- c()
+  row.clust <- c()
+  output.stats <- matrix(ncol = k, nrow = length(clust.assess))
+  cluster.sizes <- matrix(ncol = k, nrow = k)
+  for(i in c(1:k)){
+    row.clust[i] <- paste("Cluster-", i, " size")
+  }
+  for(i in c(2:k)){
+    stats.names[i] <- paste("Test", i-1)
+    
+    for(j in seq_along(clust.assess)){
+      output.stats[j, i] <- unlist(cluster.stats(d = dist, clustering = cutree(tree, k = i))[clust.assess])[j]
+      
+    }
+    
+    for(d in 1:k) {
+      cluster.sizes[d, i] <- unlist(cluster.stats(d = dist, clustering = cutree(tree, k = i))[clust.size])[d]
+      dim(cluster.sizes[d, i]) <- c(length(cluster.sizes[i]), 1)
+      cluster.sizes[d, i]
+      
+    }
+  }
+  output.stats.df <- data.frame(output.stats)
+  cluster.sizes <- data.frame(cluster.sizes)
+  cluster.sizes[is.na(cluster.sizes)] <- 0
+  rows.all <- c(clust.assess, row.clust)
+  # rownames(output.stats.df) <- clust.assess
+  output <- rbind(output.stats.df, cluster.sizes)[ ,-1]
+  colnames(output) <- stats.names[2:k]
+  rownames(output) <- rows.all
+  is.num <- sapply(output, is.numeric)
+  output[is.num] <- lapply(output[is.num], round, 2)
+  output
+}
+
+Introdução
+
+O jogo
+
+Terraria é um jogo eletrônico desenvolvido pela Re-Logic e lançado oficialmente no dia 16 de maio de 2011.  Originalmente, foi lançado para Microsoft Windows, mas ao longo dos anos foi portado para diversas plataformas, sendo que são agrupadas em: Desktop, Console,  Mobile e Nintendo 3DS. As versões são em sua maioria sincronizadas nas atualizações, mas tem suas particularidades. Para a análise do meu trabalho, estudei apenas a versão de desktop. A primeira versãodo jogo foi a 1.0. Até a data que esse trabalho foi realizado, a versão mais recente é a 1.4.2.3, lançada em 16 de maio de 2021. Essa é a versão que utilizei para as análises.
+
+O jogo é um sandbox de mundo aberto 2D  de ação e aventura com vários elementos de RPG. O jogador começa em um mundo gerado aleatoriamente a partir de alguns parâmetros e pode fazer o que quiser - sendo que o mais comum é começar coletando madeira e alguns recursos. Conforme o jogador avança em seus itens, ele pode derrotar bosses, que liberam mais itens, áreas e eventos especiais do jogo. Um ponto de extrema importância do jogo é quando o jogador derrota um boss chamado Wall of Flesh, que faz com que uma nova parte do jogo comece: o Hardmode. Nessa parte, aparecem dezenas de novos inimigos muito mais fortes, novos bosses, novos biomas e itens bem mais poderosos. Ao longo da jogatina, o jogador pode escolher focar em alguma classe de batalha: corpo a corpo, a distância, magia e invocação. Cada classe tem inúmeros itens, armas, armaduras e equipamentos especiais.
+
+Para esse estudo, decidi focar apenas em um tipo de arma da classe corpo a corpo: espadas. O motivo foi que esse tipo de arma é o mais consistente entre as observações. Itens mágicos, por exemplo, pode causar vários efeitos: explosões, dano em área, dano direcionado, dano espalhado e tudo isso com muita aleatoriedade em como o dano é calculado. Portanto, a escolha da espada se dá pela facilidade do uso da arma: apertar o botão de ataque e só, na maioria das observações.
+
+O objetivo do estudo é fazer um agrupamento das espadas a partir de várias variáveis que cada uma das espadas contém, contando também com uma análise descritiva prévia para entender como é a distribuição das espadas para cada variável.
+
+Dados
+
+Os dados foram capturados a partir de um webscraping com o pacote rvest na página da web https://terraria.fandom.com/wiki/Swords, que faz parte da wiki oficial de Terraria. Foram necessários vários tratamentos nos dados, e são eles:
+
+Mudança de nome das variáveis;
+
+Capturar somente estatísticas das espadas para a versão de desktop do jogo;
+
+Retirar etiquetas das variáveis Use time e Knockback para ficar somente com os valores numéricos;
+
+Tratamento das variáveis Autoswing e Hardmode para transformar em fatores (com 1 e 0) ao invés de símbolos;
+
+Deleção das variáveis Sell e Source , que não iriam ser úteis para a analise que eu procurava.
+
+Foram no total 97 observações, sendo que as primeiras 10 podem ser vistas na Tabela \ref{tab:head.swords}.  Damage se refere ao dano base que a espada causa no inimigo, Use time se refere a quão rápido o jogador pode infligir dano, Knockback é quão distante o inimigo é lançado ao receber dano, Crit é a chance (portanto, entre 0 e 1) de determinado ataque ter um dano crítico, ou seja, infligir o dobro de dano que o comum, Autoswing é uma habilidade inerente de algumas espadas que faz com que com apenas um clique segurado a espada inflija repetidos danos, sem precisar dar um clique para cada "swing", Hardmode é uma indicação se aquela espada pode ser obtida apenas no Hardmode ou no no pré-hardmode e, finalmente, Rarity é uma sinalização de quão rara é aquela espada de "00*" até "10*". Por exemplo, espadas que são feitas manualmente a partir de minerais ou itens pegos facilmente são menos raras que espadas que vem a partir da derrota de algum inimigo que só aparece em certa circunstância do jogo, portanto, essa variável indica quão difícil de conseguir é aquele item independente da fase do jogo.
+
+{r head.swords, include = T}
+ swords %>% head() %>% select(-ID,-URL) %>% 
+   kable(format = "latex", booktabs = T,
+                   align = "l",
+                   caption = "\\label{tab:head.swords}Cabeça da base de dados tratada",
+                   centering = T,
+                   format.args = list(small.mark = ",")) %>% 
+  kable_styling(latex_options = "hold_position")
+
+Metodologia
+
+A clusterização escolhida foi a hierárquica divisiva, através da função diana do pacote do R cluster, baseado na metodologia de Kaufman and Rousseeuw 2009. Como tenho diferentes tipos de variáveis (discretas e contínuas), calculei a matriz de dissimilaridades a partir da distância de gower com a função daisy do mesmo pacote. Eu escolhi o tipo divisivo de clusterização pois penso que, primeiramente, todas as espadas estão dentro de um único grupo de itens: espadas, claro. Como existem outros grupos de itens (arcos, revolveres, itens mágicos…), o que faz mais sentido pra mim é pensar que espadas são grande grupo único que pode ser subdividido em vários outros subgrupos, necessariamente nessa ordem. 
+
+Resultados
+
+Análise descritiva
+
+{r scatterplots, include = T, fig.pos = 'H'}
+grid.arrange(g.dmVSut, g.dmVSkb, ncol = 2)
+
